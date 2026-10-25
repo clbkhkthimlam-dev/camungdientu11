@@ -1,0 +1,8 @@
+{
+  "name": "Remix EM-Induction 3D Lab — Mô Phỏng Cảm Ứng Điện Từ Lớp 9",
+  "description": "Phòng thí nghiệm ảo 3D tương tác mô phỏng hiện tượng cảm ứng điện từ (Định luật Faraday–Lenz) dành cho môn Khoa học tự nhiên lớp 9 với thí nghiệm nam châm vĩnh cửu và nam châm điện.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

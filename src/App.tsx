@@ -59,6 +59,7 @@ import {
   MAGNET_DEFAULT_X,
   MAGNET_MAX_X,
   MAGNET_MIN_X,
+  MIN_DRAG_SEPARATION_X,
   PhysicsState,
   SecondaryCircuitMode,
   SimulationParams,
@@ -99,6 +100,8 @@ export default function App() {
   // Chế độ xoay Điện kế G 360° hoặc Tự động quay đối diện hướng xem
   const [galvAutoFaceCamera, setGalvAutoFaceCamera] = useState<boolean>(false);
   const [galvAngleDeg, setGalvAngleDeg] = useState<number>(-24);
+  // Chế độ Kéo & Nhấc 3D Tự Do (bấm giữ bất kỳ thiết bị nào để vừa kéo ngang vừa nhấc lên cao)
+  const [free3DDragMode, setFree3DDragMode] = useState<boolean>(false);
 
   const [webglFailed, setWebglFailed] = useState<boolean>(false);
   const [isSoftwareGl, setIsSoftwareGl] = useState<boolean>(false);
@@ -944,8 +947,7 @@ export default function App() {
     targetCoilYRef.current = 0;
     targetCoilZRef.current = 0;
     if (sceneControllerRef.current) {
-      sceneControllerRef.current.placeMagnetOnTable();
-      sceneControllerRef.current.placeCoilOnTable();
+      sceneControllerRef.current.placeAllDevicesOnTable();
     }
     if (sliderReleaseTimeoutRef.current !== null) {
       window.clearTimeout(sliderReleaseTimeoutRef.current);
@@ -955,6 +957,14 @@ export default function App() {
       isDraggingCoilRef.current = false;
       sliderReleaseTimeoutRef.current = null;
     }, 180);
+  }, []);
+
+  const handleToggleFree3DDragMode = useCallback(() => {
+    setFree3DDragMode((prev) => {
+      const next = !prev;
+      sceneControllerRef.current?.setFree3DDragMode(next);
+      return next;
+    });
   }, []);
 
   const handleCoilElevationChange = useCallback((newY: number) => {
@@ -2094,7 +2104,35 @@ export default function App() {
 
         {/* 3. THANH ĐIỀU KHIỂN DƯỚI ĐÁY THU GỌN TỐI ĐA (COMPACT COLLAPSIBLE BOTTOM DOCK) */}
         <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 z-20 w-[96%] max-w-3xl pointer-events-auto">
-          <div className="flex justify-center mb-0.5">
+          <div className="flex justify-center items-center gap-1.5 mb-0.5">
+            <button
+              type="button"
+              onClick={handleToggleFree3DDragMode}
+              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-t-lg border border-b-0 text-[11px] font-bold transition-all cursor-pointer shadow ${
+                free3DDragMode
+                  ? 'bg-amber-600 border-amber-400 text-white shadow-[0_0_12px_rgba(245,158,11,0.45)]'
+                  : 'bg-slate-900/95 border-slate-700 text-amber-300 hover:text-white'
+              }`}
+              title="Bật để nắm bất kỳ thiết bị nào (Nam châm, Ống dây, Điện kế, Nguồn điện) vừa kéo ngang vừa nhấc lên cao 3D tự do"
+            >
+              <ArrowUpToLine className="w-3 h-3" />
+              <span>
+                {free3DDragMode
+                  ? 'Chế độ Kéo: Nhấc & Kéo 3D Tự Do ✥ (Đang bật)'
+                  : 'Chế độ Kéo: Trượt ngang ↔ (Bấm để bật Nhấc 3D ✥)'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePlaceBothOnTable}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-t-lg bg-slate-900/95 border border-b-0 border-slate-700 text-[11px] font-semibold text-emerald-300 hover:text-emerald-200 cursor-pointer shadow"
+              title="Đặt tất cả thiết bị (Nam châm, Ống dây, Điện kế, Pin, Khóa K) hạ ngay ngắn xuống mặt bàn"
+            >
+              <ArrowDownToLine className="w-3 h-3 text-emerald-400" />
+              <span>Hạ tất cả về bàn</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setIsDockCollapsed((prev) => !prev)}
@@ -2149,8 +2187,8 @@ export default function App() {
                           Nam châm 3D: Y={(uiPhysicsState.magnetY ?? 0).toFixed(2)}m · Z={(uiPhysicsState.magnetZ ?? 0).toFixed(2)}m
                         </span>
                       ) : (
-                        <span className="text-[10px] text-slate-400 hidden sm:inline">
-                          (Nắm vòng vàng trên nam châm để nhấc 3D · Rà gần bàn tự hít)
+                        <span className="text-[10px] text-slate-300 hidden sm:inline">
+                          💡 Mẹo: Nắm thân nam châm kéo qua lại · Nắm <strong className="text-amber-300">quai vàng phía trên</strong> (hoặc giữ Shift) để vừa nhấc vừa kéo!
                         </span>
                       )}
                     </div>
@@ -2222,8 +2260,8 @@ export default function App() {
                           Ống dây 3D: Y={(uiPhysicsState.coilY ?? 0).toFixed(2)}m · Z={(uiPhysicsState.coilZ ?? 0).toFixed(2)}m
                         </span>
                       ) : (
-                        <span className="text-[10px] text-slate-400 hidden sm:inline">
-                          (Nắm núm vàng trên ống dây để nhấc 3D · Dây tự co giãn)
+                        <span className="text-[10px] text-slate-300 hidden sm:inline">
+                          (Nắm <strong className="text-amber-300">quai vàng trên ống dây</strong> để vừa nhấc lên vừa đưa qua lại · Dây nối tự co giãn)
                         </span>
                       )}
 
@@ -2277,40 +2315,49 @@ export default function App() {
 
                   {/* Thanh trượt kéo vị trí ngang X trên bàn */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    <div className="flex items-center gap-2 bg-slate-950/90 px-2.5 py-1 rounded-lg border border-slate-800">
-                      <span className="text-[11px] font-semibold text-sky-400 whitespace-nowrap">
-                        ◄ Nam châm X:
+                    <div className="flex items-center gap-2 bg-slate-950/90 px-2.5 py-1.5 rounded-lg border border-slate-800">
+                      <span className="text-[11px] font-bold text-sky-400 whitespace-nowrap">
+                        ↔ Nam châm X:
                       </span>
                       <input
                         type="range"
                         min={MAGNET_MIN_X}
-                        max={Math.min(MAGNET_MAX_X, uiPhysicsState.coilX - 1.1)}
-                        step={0.015}
+                        max={Math.min(
+                          MAGNET_MAX_X,
+                          uiPhysicsState.coilX - MIN_DRAG_SEPARATION_X
+                        )}
+                        step={0.01}
                         value={uiPhysicsState.magnetX}
                         onChange={(e) =>
                           handleMagnetSliderChange(parseFloat(e.target.value))
                         }
-                        className="w-full h-1.5 accent-sky-500 cursor-pointer"
+                        className="w-full h-2 accent-sky-500 cursor-pointer"
                         aria-label="Thanh trượt kéo vị trí nam châm"
                       />
+                      <span className="text-[10px] font-mono text-sky-300 w-11 text-right">
+                        {uiPhysicsState.magnetX.toFixed(2)}m
+                      </span>
                     </div>
 
-                    <div className="flex items-center gap-2 bg-slate-950/90 px-2.5 py-1 rounded-lg border border-slate-800">
-                      <span className="text-[11px] font-semibold text-amber-400 whitespace-nowrap">
-                        ◄ Ống dây X:
+                    <div className="flex items-center gap-2 bg-slate-950/90 px-2.5 py-1.5 rounded-lg border border-slate-800">
+                      <span className="text-[11px] font-bold text-amber-400 whitespace-nowrap">
+                        ↔ Ống dây X:
                       </span>
                       <input
                         type="range"
-                        min={uiPhysicsState.magnetX + 1.1}
+                        min={uiPhysicsState.magnetX + MIN_DRAG_SEPARATION_X}
                         max={2.4}
-                        step={0.015}
+                        step={0.01}
                         value={uiPhysicsState.coilX}
                         onChange={(e) =>
                           handleCoilSliderChange(parseFloat(e.target.value))
                         }
-                        className="w-full h-1.5 accent-amber-500 cursor-pointer"
+                        className="w-full h-2 accent-amber-500 cursor-pointer"
                         aria-label="Thanh trượt kéo vị trí ống dây"
                       />
+                      <span className="text-[10px] font-mono text-amber-300 w-11 text-right">
+                        {uiPhysicsState.coilX.toFixed(2)}m
+                      </span>
                     </div>
                   </div>
                 </div>

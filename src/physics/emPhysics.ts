@@ -107,10 +107,11 @@ export interface PhysicsState {
 export const COIL_CENTER_X = 0;
 export const ELECTROMAGNET_DEFAULT_X = -1.72;
 export const MIN_SEPARATION_X = 1.1;
-export const TABLE_MIN_X = -4.3;
-export const TABLE_MAX_X = 2.4;
-export const MAGNET_MIN_X = -4.2;
-export const MAGNET_MAX_X = -1.1;
+export const MIN_DRAG_SEPARATION_X = 0.72;
+export const TABLE_MIN_X = -4.45;
+export const TABLE_MAX_X = 2.6;
+export const MAGNET_MIN_X = -4.35;
+export const MAGNET_MAX_X = -0.72;
 export const MAGNET_DEFAULT_X = -2.65;
 
 /** Bước thời gian vật lí cố định (1/120 giây) */
@@ -147,13 +148,13 @@ export function createDefaultParams(): SimulationParams {
 
 export function clampMagnetX(x: number, coilX: number = COIL_CENTER_X): number {
   if (!Number.isFinite(x)) return MAGNET_DEFAULT_X;
-  const maxAllowed = coilX - MIN_SEPARATION_X;
+  const maxAllowed = coilX - MIN_DRAG_SEPARATION_X;
   return Math.max(TABLE_MIN_X, Math.min(maxAllowed, x));
 }
 
 export function clampCoilX(coilX: number, leftSourceX: number): number {
   if (!Number.isFinite(coilX)) return COIL_CENTER_X;
-  const minAllowed = leftSourceX + MIN_SEPARATION_X;
+  const minAllowed = leftSourceX + MIN_DRAG_SEPARATION_X;
   return Math.max(minAllowed, Math.min(TABLE_MAX_X, coilX));
 }
 
@@ -181,7 +182,7 @@ export function computePermanentMagnetFluxPerTurn(
 
   // Khoảng cách 3D thực tế trong không gian giữa nam châm và tâm cuộn cảm ứng
   const r3d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  const r = Math.max(MIN_SEPARATION_X, r3d);
+  const r = Math.max(MIN_DRAG_SEPARATION_X, r3d);
   const axialProjection = r > 0 ? Math.min(1, Math.abs(dx) / r) : 1;
 
   // Hệ số góc quay quanh trục Y thẳng đứng của nam châm trên trụ thoi:
@@ -200,11 +201,13 @@ export function computePermanentMagnetFluxPerTurn(
 
   const dMin = MIN_SEPARATION_X; // 1.1
   const delta = Math.max(0, r - dMin);
+  // Khi đưa đầu cực nam châm sát vào miệng ống dây (r < 1.1), từ thông tiếp tục tăng mượt
+  const closeBoost = r < dMin ? 1 + 0.55 * (dMin - r) : 1;
   const sigma = 1.15;
   const phi0 = 0.012;
   const gaussianPart = Math.exp(-(delta * delta) / (2 * sigma * sigma));
   const decayTail = 1 / (1 + 0.45 * delta);
-  return polarity * phi0 * gaussianPart * decayTail * axialProjection * rotationFactor;
+  return polarity * phi0 * closeBoost * gaussianPart * decayTail * axialProjection * rotationFactor;
 }
 
 /**
@@ -407,9 +410,9 @@ export function stepPhysics(
   let nextIsRotatingAC = input.isRotatingAC ?? prevState.isRotatingAC ?? false;
   let nextAcRpm = input.acRpm ?? prevState.acRpm ?? 120;
 
-  const smoothFactor = 1 - Math.exp(-32 * dt);
-  const SNAP_TABLE_Y_THRESHOLD = 0.22;
-  const SNAP_TABLE_Z_THRESHOLD = 0.16;
+  const smoothFactor = 1 - Math.exp(-48 * dt);
+  const SNAP_TABLE_Y_THRESHOLD = 0.025;
+  const SNAP_TABLE_Z_THRESHOLD = 0.08;
 
   // Cập nhật vị trí cuộn dây cảm ứng (Hỗ trợ kéo di chuyển tự do trong không gian 3D X, Y, Z)
   if (input.isDraggingCoil) {
@@ -424,7 +427,6 @@ export function stepPhysics(
     }
     if (typeof input.targetCoilY === 'number') {
       let clampedY = Math.max(0, Math.min(2.5, input.targetCoilY));
-      // Tự động hít/snap về bệ đỡ trên bàn khi rà về gần mặt bàn
       if (clampedY < SNAP_TABLE_Y_THRESHOLD) {
         clampedY = 0;
       }
@@ -432,14 +434,14 @@ export function stepPhysics(
       if (Math.abs(nextCoilY - clampedY) < 1e-4) nextCoilY = clampedY;
     }
     if (typeof input.targetCoilZ === 'number') {
-      let clampedZ = Math.max(-1.8, Math.min(1.8, input.targetCoilZ));
-      if (Math.abs(clampedZ) < SNAP_TABLE_Z_THRESHOLD && nextCoilY < 0.35) {
+      let clampedZ = Math.max(-1.95, Math.min(1.95, input.targetCoilZ));
+      if (Math.abs(clampedZ) < SNAP_TABLE_Z_THRESHOLD && nextCoilY < 0.12) {
         clampedZ = 0;
       }
       nextCoilZ = (prevState.coilZ ?? 0) + (clampedZ - (prevState.coilZ ?? 0)) * smoothFactor;
       if (Math.abs(nextCoilZ - clampedZ) < 1e-4) nextCoilZ = clampedZ;
     }
-    nextIsCoilLifted = nextCoilY > 0.04 || Math.abs(nextCoilZ) > 0.04;
+    nextIsCoilLifted = nextCoilY > 0.02 || Math.abs(nextCoilZ) > 0.02;
   } else if (typeof input.isCoilLifted === 'boolean') {
     nextIsCoilLifted = input.isCoilLifted;
     if (!nextIsCoilLifted) {
@@ -459,11 +461,11 @@ export function stepPhysics(
       nextCoilY = (prevState.coilY ?? 0) + (clampedY - (prevState.coilY ?? 0)) * smoothFactor;
     }
     if (typeof input.targetCoilZ === 'number') {
-      let clampedZ = Math.max(-1.8, Math.min(1.8, input.targetCoilZ));
-      if (Math.abs(clampedZ) < SNAP_TABLE_Z_THRESHOLD && nextCoilY < 0.35) clampedZ = 0;
+      let clampedZ = Math.max(-1.95, Math.min(1.95, input.targetCoilZ));
+      if (Math.abs(clampedZ) < SNAP_TABLE_Z_THRESHOLD && nextCoilY < 0.12) clampedZ = 0;
       nextCoilZ = (prevState.coilZ ?? 0) + (clampedZ - (prevState.coilZ ?? 0)) * smoothFactor;
     }
-    nextIsCoilLifted = nextCoilY > 0.04 || Math.abs(nextCoilZ) > 0.04;
+    nextIsCoilLifted = nextCoilY > 0.02 || Math.abs(nextCoilZ) > 0.02;
   }
 
   if (params.experiment === 'permanent_magnet') {
@@ -487,7 +489,7 @@ export function stepPhysics(
       nextMagnetX = clampMagnetX(prevState.magnetX, nextCoilX);
     }
 
-    // Xử lý vị trí 3D nam châm (nhấc lên Y, dời chiều sâu Z + tự động hít/snap về bàn khi rà gần)
+    // Xử lý vị trí 3D nam châm (nhấc lên Y, dời chiều sâu Z + tự động hít/snap về bàn khi thả gần bàn)
     if (input.isDraggingMagnet) {
       if (typeof input.targetMagnetY === 'number') {
         let clampedY = Math.max(0, Math.min(2.5, input.targetMagnetY));
@@ -498,14 +500,14 @@ export function stepPhysics(
         if (Math.abs(nextMagnetY - clampedY) < 1e-4) nextMagnetY = clampedY;
       }
       if (typeof input.targetMagnetZ === 'number') {
-        let clampedZ = Math.max(-1.8, Math.min(1.8, input.targetMagnetZ));
-        if (Math.abs(clampedZ) < SNAP_TABLE_Z_THRESHOLD && nextMagnetY < 0.35) {
+        let clampedZ = Math.max(-1.95, Math.min(1.95, input.targetMagnetZ));
+        if (Math.abs(clampedZ) < SNAP_TABLE_Z_THRESHOLD && nextMagnetY < 0.12) {
           clampedZ = 0;
         }
         nextMagnetZ = prevState.magnetZ + (clampedZ - prevState.magnetZ) * smoothFactor;
         if (Math.abs(nextMagnetZ - clampedZ) < 1e-4) nextMagnetZ = clampedZ;
       }
-      nextIsMagnetLifted = nextMagnetY > 0.04 || Math.abs(nextMagnetZ) > 0.04;
+      nextIsMagnetLifted = nextMagnetY > 0.02 || Math.abs(nextMagnetZ) > 0.02;
     } else if (typeof input.isMagnetLifted === 'boolean') {
       nextIsMagnetLifted = input.isMagnetLifted;
       if (!nextIsMagnetLifted) {
@@ -525,11 +527,11 @@ export function stepPhysics(
         nextMagnetY = prevState.magnetY + (clampedY - prevState.magnetY) * smoothFactor;
       }
       if (typeof input.targetMagnetZ === 'number') {
-        let clampedZ = Math.max(-1.8, Math.min(1.8, input.targetMagnetZ));
-        if (Math.abs(clampedZ) < SNAP_TABLE_Z_THRESHOLD && nextMagnetY < 0.35) clampedZ = 0;
+        let clampedZ = Math.max(-1.95, Math.min(1.95, input.targetMagnetZ));
+        if (Math.abs(clampedZ) < SNAP_TABLE_Z_THRESHOLD && nextMagnetY < 0.12) clampedZ = 0;
         nextMagnetZ = prevState.magnetZ + (clampedZ - prevState.magnetZ) * smoothFactor;
       }
-      nextIsMagnetLifted = nextMagnetY > 0.04 || Math.abs(nextMagnetZ) > 0.04;
+      nextIsMagnetLifted = nextMagnetY > 0.02 || Math.abs(nextMagnetZ) > 0.02;
     }
 
     // Xử lý góc quay nam châm trên trụ thoi (máy phát điện xoay chiều AC hoặc quay bằng tay)

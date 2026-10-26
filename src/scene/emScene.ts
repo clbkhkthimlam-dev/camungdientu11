@@ -604,6 +604,16 @@ function createLedModuleBoardTexture(maxAnisotropy: number): THREE.CanvasTexture
   return tex;
 }
 
+/** Tạo vật liệu Hitbox vô hình nhưng Raycaster luôn bắt trúng 100% ở mọi phiên bản Three.js */
+function createInvisibleHitMaterial(): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    colorWrite: false,
+  });
+}
+
 export interface SceneControllerCallbacks {
   onMagnetDragStart: () => void;
   onMagnetDragMove: (newX: number, newY?: number, newZ?: number) => void;
@@ -670,6 +680,7 @@ export class EMInductionSceneController {
   private coilCarriageGroup!: THREE.Group;
   private coilFloatingGroup!: THREE.Group;
   private coilLiftHandle!: THREE.Group;
+  private coilDragRingMat!: THREE.MeshStandardMaterial;
   private coilDropLine!: THREE.Mesh;
   private coilDropShadow!: THREE.Mesh;
   private lenzRingMat!: THREE.MeshStandardMaterial;
@@ -706,16 +717,21 @@ export class EMInductionSceneController {
   private lastWireCoilY = Number.NaN;
   private lastWireCoilZ = Number.NaN;
   private lastWireGalvX = Number.NaN;
+  private lastWireGalvY = Number.NaN;
   private lastWireGalvZ = Number.NaN;
   private lastWireGalvRotY = Number.NaN;
   private lastWireLedX = Number.NaN;
+  private lastWireLedY = Number.NaN;
   private lastWireLedZ = Number.NaN;
   private lastWiringSign = 0;
 
   private lastPriWireEmX = Number.NaN;
+  private lastPriWireEmY = Number.NaN;
   private lastPriWireBatX = Number.NaN;
+  private lastPriWireBatY = Number.NaN;
   private lastPriWireBatZ = Number.NaN;
   private lastPriWireSwX = Number.NaN;
+  private lastPriWireSwY = Number.NaN;
   private lastPriWireSwZ = Number.NaN;
 
   // Đường sức từ & mũi tên chỉ chiều
@@ -741,11 +757,14 @@ export class EMInductionSceneController {
   private raycaster = new THREE.Raycaster();
   private pointerNDC = new THREE.Vector2();
   private activeDragKind: DragTargetKind = 'none';
+  private activeDragIs3DLift = false;
+  private free3DDragMode = false;
   private activePointerId: number | null = null;
   private dragOffset = new THREE.Vector3();
   private pointerDownScreenPos = new THREE.Vector2();
   private switchMovedDuringDrag = false;
   private isHoveringDraggable = false;
+  private hoveredKind: DragTargetKind = 'none';
 
   // Trạng thái hiển thị trực quan
   private showFieldLines = true;
@@ -890,6 +909,7 @@ export class EMInductionSceneController {
     this.coilDropShadow.visible = false;
     this.callbacks.onCoilDragMove(COIL_CENTER_X, 0, 0);
 
+    this.primaryCoilGroup.position.set(ELECTROMAGNET_DEFAULT_X, 0, 0);
     this.galvanometerGroup.position.set(1.85, 0, -1.18);
     this.galvManualAngleRad = THREE.MathUtils.degToRad(-24);
     if (!this.galvAutoFaceCamera) {
@@ -903,6 +923,24 @@ export class EMInductionSceneController {
     this.lastWireCoilZ = Number.NaN;
     this.lastPriWireEmX = Number.NaN;
     this.controls.update();
+  }
+
+  public setFree3DDragMode(enabled: boolean): void {
+    this.free3DDragMode = enabled;
+  }
+
+  public placeAllDevicesOnTable(): void {
+    this.magnetFloatingGroup.position.set(0, 0, 0);
+    this.coilFloatingGroup.position.set(0, 0, 0);
+    this.primaryCoilGroup.position.y = 0;
+    this.galvanometerGroup.position.y = 0;
+    this.ledModuleGroup.position.y = 0;
+    this.batteryGroup.position.y = 0.44;
+    this.switchBaseGroup.position.y = 0.08;
+    this.callbacks.onMagnetDragMove(this.permanentMagnetGroup.position.x, 0, 0);
+    this.callbacks.onCoilDragMove(this.secondaryCoilGroup.position.x, 0, 0);
+    this.lastWireCoilX = Number.NaN;
+    this.lastPriWireEmX = Number.NaN;
   }
 
   public liftMagnet(targetY = 1.35): void {
@@ -1328,51 +1366,69 @@ export class EMInductionSceneController {
     thumbScrew.position.set(0, 1.13, 0);
     this.magnetFloatingGroup.add(thumbScrew);
 
-    // 3. Tay nắm nhấc 3D thẳng đứng (Vertical Lift Handle) trên đỉnh vít siết
+    // 3. Tay nắm nhấc 3D thẳng đứng (Vertical Lift Handle) trên đỉnh vít siết — Kích thước lớn, dễ nắm bắt
     this.magnetLiftHandle = new THREE.Group();
-    this.magnetLiftHandle.position.set(0, 1.34, 0);
+    this.magnetLiftHandle.position.set(0, 1.36, 0);
     const liftMat = new THREE.MeshStandardMaterial({
-      color: 0xf59e0b,
+      color: 0xfbbf24,
       emissive: 0xd97706,
-      emissiveIntensity: 0.5,
-      roughness: 0.18,
-      metalness: 0.9,
+      emissiveIntensity: 0.65,
+      roughness: 0.16,
+      metalness: 0.88,
     });
-    const liftRingGeo = new THREE.TorusGeometry(0.16, 0.024, 16, 32);
+    const liftRingGeo = new THREE.TorusGeometry(0.22, 0.036, 18, 36);
     const liftRingMesh = new THREE.Mesh(liftRingGeo, liftMat);
-    const arrowShaftGeo = new THREE.CylinderGeometry(0.015, 0.015, 0.22, 12);
+    const liftCenterGrip = new THREE.Mesh(
+      new THREE.SphereGeometry(0.068, 16, 16),
+      liftMat
+    );
+    const arrowShaftGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.28, 12);
     const arrowShaft = new THREE.Mesh(arrowShaftGeo, liftMat);
-    const arrowConeGeo = new THREE.ConeGeometry(0.045, 0.08, 16);
+    const arrowConeGeo = new THREE.ConeGeometry(0.058, 0.1, 16);
     const arrowConeUp = new THREE.Mesh(arrowConeGeo, liftMat);
-    arrowConeUp.position.set(0, 0.12, 0);
+    arrowConeUp.position.set(0, 0.15, 0);
     const arrowConeDown = new THREE.Mesh(arrowConeGeo, liftMat);
-    arrowConeDown.position.set(0, -0.12, 0);
+    arrowConeDown.position.set(0, -0.15, 0);
     arrowConeDown.rotateZ(Math.PI);
-    this.magnetLiftHandle.add(liftRingMesh, arrowShaft, arrowConeUp, arrowConeDown);
+    // Hitbox lớn riêng cho núm nhấc 3D của nam châm
+    const magnetLiftHitBox = new THREE.Mesh(
+      new THREE.BoxGeometry(0.82, 0.64, 0.82),
+      createInvisibleHitMaterial()
+    );
+    this.magnetLiftHandle.add(
+      liftRingMesh,
+      liftCenterGrip,
+      arrowShaft,
+      arrowConeUp,
+      arrowConeDown,
+      magnetLiftHitBox
+    );
     this.magnetFloatingGroup.add(this.magnetLiftHandle);
 
-    // Tay nắm kéo ngang dưới đáy
-    const handleGeo = new THREE.TorusGeometry(0.24, 0.03, 18, 40);
+    // Tay nắm kéo ngang rộng rãi ở mặt trước & mặt sau dưới đáy
+    const handleGeo = new THREE.TorusGeometry(0.28, 0.036, 18, 40);
     handleGeo.rotateX(Math.PI / 2);
     this.magnetDragRingMat = new THREE.MeshStandardMaterial({
       color: 0x38bdf8,
       emissive: 0x0284c7,
-      emissiveIntensity: 0.5,
+      emissiveIntensity: 0.6,
       roughness: 0.2,
     });
-    const handleMesh = new THREE.Mesh(handleGeo, this.magnetDragRingMat);
-    handleMesh.position.set(0, 0.2, 0.46);
-    this.magnetFloatingGroup.add(handleMesh);
+    const handleMeshFront = new THREE.Mesh(handleGeo, this.magnetDragRingMat);
+    handleMeshFront.position.set(0, 0.2, 0.46);
+    const handleMeshBack = new THREE.Mesh(handleGeo, this.magnetDragRingMat);
+    handleMeshBack.position.set(0, 0.2, -0.46);
+    this.magnetFloatingGroup.add(handleMeshFront, handleMeshBack);
 
     // Nhãn 3D hướng dẫn nổi
     const badgeTex = createBadgeTexture(
-      '◄ KÉO / NHẤC NAM CHÂM 3D ►',
-      'Kéo núm trên để nhấc · Kéo thân để dời vị trí',
+      '◄ KÉO TỚI LUI / NHẤC NAM CHÂM 3D ►',
+      'Kéo thân để trượt ngang · Kéo vòng vàng trên đỉnh để nhấc 3D',
       '#38bdf8',
       maxAniso
     );
     this.disposables.push(badgeTex);
-    const badgeGeo = new THREE.PlaneGeometry(1.24, 0.26);
+    const badgeGeo = new THREE.PlaneGeometry(1.32, 0.28);
     const badgeMat = new THREE.MeshBasicMaterial({
       map: badgeTex,
       transparent: true,
@@ -1380,14 +1436,13 @@ export class EMInductionSceneController {
       side: THREE.DoubleSide,
     });
     this.magnetGuideBadge = new THREE.Mesh(badgeGeo, badgeMat);
-    this.magnetGuideBadge.position.set(0, 1.62, 0);
+    this.magnetGuideBadge.position.set(0, 1.72, 0);
     this.magnetFloatingGroup.add(this.magnetGuideBadge);
 
-    // Hộp va chạm Hitbox bao phủ toàn bộ cụm
-    const hitGeo = new THREE.BoxGeometry(1.95, 2.2, 1.4);
-    const hitMat = new THREE.MeshBasicMaterial({ visible: false });
-    const hitBox = new THREE.Mesh(hitGeo, hitMat);
-    hitBox.position.set(0, 0.95, 0);
+    // Hộp va chạm Hitbox bao phủ toàn bộ thân và bệ nam châm (vô hình nhưng Raycaster luôn bắt trúng)
+    const hitGeo = new THREE.BoxGeometry(2.15, 1.26, 1.55);
+    const hitBox = new THREE.Mesh(hitGeo, createInvisibleHitMaterial());
+    hitBox.position.set(0, 0.58, 0);
     this.magnetFloatingGroup.add(hitBox);
 
     group.add(this.magnetFloatingGroup);
@@ -1495,14 +1550,14 @@ export class EMInductionSceneController {
     this.primaryCoilGroup.add(this.ironCoreMesh);
 
     const emHitBox = new THREE.Mesh(
-      new THREE.BoxGeometry(1.5, 1.6, 1.2),
-      new THREE.MeshBasicMaterial({ visible: false })
+      new THREE.BoxGeometry(1.75, 1.75, 1.45),
+      createInvisibleHitMaterial()
     );
-    emHitBox.position.set(0, 0.8, 0);
+    emHitBox.position.set(0, 0.82, 0);
     this.primaryCoilGroup.add(emHitBox);
     group.add(this.primaryCoilGroup);
 
-    // 2. Bộ nguồn điện một chiều hiện số (Có thể kéo dời vị trí trên mặt bàn)
+    // 2. Bộ nguồn điện một chiều hiện số (Có thể kéo dời vị trí & nhấc trên mặt bàn)
     this.batteryGroup = new THREE.Group();
     this.batteryGroup.position.set(-3.35, 0.44, -1.25);
     this.batteryGroup.rotation.y = THREE.MathUtils.degToRad(18);
@@ -1543,7 +1598,11 @@ export class EMInductionSceneController {
       new THREE.MeshStandardMaterial({ color: 0x3b82f6, roughness: 0.25, metalness: 0.5 })
     );
     negTerm.position.set(-0.28, -0.22, 0.48);
-    this.batteryGroup.add(posTerm, negTerm);
+    const batHitBox = new THREE.Mesh(
+      new THREE.BoxGeometry(1.48, 1.15, 1.2),
+      createInvisibleHitMaterial()
+    );
+    this.batteryGroup.add(posTerm, negTerm, batHitBox);
     group.add(this.batteryGroup);
 
     // 3. Công tắc cầu dao Khóa K (Chạm để đóng/ngắt, giữ kéo để dời vị trí trên mặt bàn)
@@ -1611,10 +1670,10 @@ export class EMInductionSceneController {
     this.switchBaseGroup.add(this.switchGuideBadge);
 
     const swHitBox = new THREE.Mesh(
-      new THREE.BoxGeometry(1.4, 0.9, 1.0),
-      new THREE.MeshBasicMaterial({ visible: false })
+      new THREE.BoxGeometry(1.55, 1.05, 1.15),
+      createInvisibleHitMaterial()
     );
-    swHitBox.position.set(0, 0.35, 0);
+    swHitBox.position.set(0, 0.38, 0);
     this.switchBaseGroup.add(swHitBox);
 
     group.add(this.switchBaseGroup);
@@ -1770,45 +1829,73 @@ export class EMInductionSceneController {
     lenzRing.position.set(-0.67, 0.85, 0);
     this.coilFloatingGroup.add(lenzRing);
 
-    // 3. Tay nắm nhấc 3D thẳng đứng trên đỉnh cuộn dây (Vertical Lift Handle)
+    // 3. Tay nắm nhấc 3D thẳng đứng trên đỉnh cuộn dây (Vertical Lift Handle) — Lớn & dễ bắt trúng
     this.coilLiftHandle = new THREE.Group();
-    this.coilLiftHandle.position.set(0, 1.62, 0);
+    this.coilLiftHandle.position.set(0, 1.66, 0);
     const liftMat = new THREE.MeshStandardMaterial({
+      color: 0xfbbf24,
+      emissive: 0xd97706,
+      emissiveIntensity: 0.65,
+      roughness: 0.16,
+      metalness: 0.88,
+    });
+    const liftRingGeo = new THREE.TorusGeometry(0.24, 0.038, 18, 36);
+    const liftRingMesh = new THREE.Mesh(liftRingGeo, liftMat);
+    const liftCenterGrip = new THREE.Mesh(
+      new THREE.SphereGeometry(0.072, 16, 16),
+      liftMat
+    );
+    const arrowShaftGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.28, 12);
+    const arrowShaft = new THREE.Mesh(arrowShaftGeo, liftMat);
+    const arrowConeGeo = new THREE.ConeGeometry(0.06, 0.1, 16);
+    const arrowConeUp = new THREE.Mesh(arrowConeGeo, liftMat);
+    arrowConeUp.position.set(0, 0.15, 0);
+    const arrowConeDown = new THREE.Mesh(arrowConeGeo, liftMat);
+    arrowConeDown.position.set(0, -0.15, 0);
+    arrowConeDown.rotateZ(Math.PI);
+    const coilLiftHitBox = new THREE.Mesh(
+      new THREE.BoxGeometry(0.86, 0.68, 0.86),
+      createInvisibleHitMaterial()
+    );
+    this.coilLiftHandle.add(
+      liftRingMesh,
+      liftCenterGrip,
+      arrowShaft,
+      arrowConeUp,
+      arrowConeDown,
+      coilLiftHitBox
+    );
+    this.coilFloatingGroup.add(this.coilLiftHandle);
+
+    // Tay nắm kéo ngang dưới đáy cuộn dây cảm ứng
+    const coilHandleGeo = new THREE.TorusGeometry(0.26, 0.034, 18, 40);
+    coilHandleGeo.rotateX(Math.PI / 2);
+    this.coilDragRingMat = new THREE.MeshStandardMaterial({
       color: 0xf59e0b,
       emissive: 0xd97706,
-      emissiveIntensity: 0.5,
-      roughness: 0.18,
-      metalness: 0.9,
+      emissiveIntensity: 0.55,
+      roughness: 0.2,
     });
-    const liftRingGeo = new THREE.TorusGeometry(0.18, 0.026, 16, 32);
-    const liftRingMesh = new THREE.Mesh(liftRingGeo, liftMat);
-    const arrowShaftGeo = new THREE.CylinderGeometry(0.016, 0.016, 0.24, 12);
-    const arrowShaft = new THREE.Mesh(arrowShaftGeo, liftMat);
-    const arrowConeGeo = new THREE.ConeGeometry(0.05, 0.09, 16);
-    const arrowConeUp = new THREE.Mesh(arrowConeGeo, liftMat);
-    arrowConeUp.position.set(0, 0.13, 0);
-    const arrowConeDown = new THREE.Mesh(arrowConeGeo, liftMat);
-    arrowConeDown.position.set(0, -0.13, 0);
-    arrowConeDown.rotateZ(Math.PI);
-    this.coilLiftHandle.add(liftRingMesh, arrowShaft, arrowConeUp, arrowConeDown);
-    this.coilFloatingGroup.add(this.coilLiftHandle);
+    const coilHandleFront = new THREE.Mesh(coilHandleGeo, this.coilDragRingMat);
+    coilHandleFront.position.set(0, 0.2, 0.58);
+    this.coilFloatingGroup.add(coilHandleFront);
 
     const coilBadgeTex = createBadgeTexture(
       '◄ KÉO / NHẤC CUỘN DÂY 3D ►',
-      'Kéo núm trên để nhấc · Rà gần bàn tự hít vào bệ',
+      'Kéo thân để trượt ngang · Kéo vòng vàng trên đỉnh để nhấc 3D',
       '#f59e0b',
       maxAniso
     );
     this.disposables.push(coilBadgeTex);
     this.coilGuideBadge = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.24, 0.26),
+      new THREE.PlaneGeometry(1.32, 0.28),
       new THREE.MeshBasicMaterial({
         map: coilBadgeTex,
         transparent: true,
         depthWrite: false,
       })
     );
-    this.coilGuideBadge.position.set(0, 1.98, 0);
+    this.coilGuideBadge.position.set(0, 2.04, 0);
     this.coilFloatingGroup.add(this.coilGuideBadge);
 
     const postGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.24, 16);
@@ -1829,10 +1916,10 @@ export class EMInductionSceneController {
     this.coilFloatingGroup.add(postA, postB, postFrontA, postFrontB);
 
     const coilHitBox = new THREE.Mesh(
-      new THREE.BoxGeometry(1.68, 1.95, 1.5),
-      new THREE.MeshBasicMaterial({ visible: false })
+      new THREE.BoxGeometry(1.88, 1.38, 1.65),
+      createInvisibleHitMaterial()
     );
-    coilHitBox.position.set(0, 0.95, 0);
+    coilHitBox.position.set(0, 0.72, 0);
     this.coilFloatingGroup.add(coilHitBox);
 
     group.add(this.coilFloatingGroup);
@@ -1921,10 +2008,10 @@ export class EMInductionSceneController {
 
     // Hitbox ưu tiên cho núm xoay 360° trên đỉnh và vành mâm xoay
     const topKnobHit = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.36, 0.36, 0.28, 18),
-      new THREE.MeshBasicMaterial({ visible: false })
+      new THREE.CylinderGeometry(0.48, 0.48, 0.42, 18),
+      createInvisibleHitMaterial()
     );
-    topKnobHit.position.set(0, 1.9, -0.34);
+    topKnobHit.position.set(0, 1.94, -0.34);
     this.galvRotateRingGroup.add(topKnobHit);
 
     group.add(this.galvRotateRingGroup);
@@ -2113,6 +2200,13 @@ export class EMInductionSceneController {
     this.galvGuideBadge.position.set(0, 2.18, -0.15);
     group.add(this.galvGuideBadge);
 
+    const galvHitBox = new THREE.Mesh(
+      new THREE.BoxGeometry(2.15, 1.75, 1.55),
+      createInvisibleHitMaterial()
+    );
+    galvHitBox.position.set(0, 0.88, -0.05);
+    group.add(galvHitBox);
+
     return group;
   }
 
@@ -2289,10 +2383,10 @@ export class EMInductionSceneController {
     group.add(this.ledGuideBadge);
 
     const ledHitBox = new THREE.Mesh(
-      new THREE.BoxGeometry(1.5, 0.85, 1.05),
-      new THREE.MeshBasicMaterial({ visible: false })
+      new THREE.BoxGeometry(1.65, 1.05, 1.25),
+      createInvisibleHitMaterial()
     );
-    ledHitBox.position.set(0, 0.35, 0);
+    ledHitBox.position.set(0, 0.42, 0);
     group.add(ledHitBox);
 
     return group;
@@ -2370,18 +2464,22 @@ export class EMInductionSceneController {
     coilZ: number = 0
   ): void {
     const gx = this.galvanometerGroup.position.x;
+    const gy = this.galvanometerGroup.position.y;
     const gz = this.galvanometerGroup.position.z;
     const gRotY = this.galvanometerGroup.rotation.y;
     const lx = this.ledModuleGroup.position.x;
+    const ly = this.ledModuleGroup.position.y;
     const lz = this.ledModuleGroup.position.z;
     if (
       Math.abs(coilX - this.lastWireCoilX) < 0.005 &&
       Math.abs(coilY - this.lastWireCoilY) < 0.005 &&
       Math.abs(coilZ - this.lastWireCoilZ) < 0.005 &&
       Math.abs(gx - this.lastWireGalvX) < 0.005 &&
+      Math.abs(gy - this.lastWireGalvY) < 0.005 &&
       Math.abs(gz - this.lastWireGalvZ) < 0.005 &&
       Math.abs(gRotY - this.lastWireGalvRotY) < 0.006 &&
       Math.abs(lx - this.lastWireLedX) < 0.005 &&
+      Math.abs(ly - this.lastWireLedY) < 0.005 &&
       Math.abs(lz - this.lastWireLedZ) < 0.005 &&
       wiringSign === this.lastWiringSign
     ) {
@@ -2392,9 +2490,11 @@ export class EMInductionSceneController {
     this.lastWireCoilY = coilY;
     this.lastWireCoilZ = coilZ;
     this.lastWireGalvX = gx;
+    this.lastWireGalvY = gy;
     this.lastWireGalvZ = gz;
     this.lastWireGalvRotY = gRotY;
     this.lastWireLedX = lx;
+    this.lastWireLedY = ly;
     this.lastWireLedZ = lz;
     this.lastWiringSign = wiringSign;
 
@@ -2421,12 +2521,12 @@ export class EMInductionSceneController {
 
     const midA = new THREE.Vector3(
       (coilPostA.x + targetA.x) * 0.5,
-      Math.max(0.12, (coilPostA.y + targetA.y) * 0.38),
+      Math.max(0.12, (coilPostA.y + targetA.y) * 0.42),
       Math.min(coilPostA.z, targetA.z) - 0.35
     );
     const midB = new THREE.Vector3(
       (coilPostB.x + targetB.x) * 0.5,
-      Math.max(0.12, (coilPostB.y + targetB.y) * 0.38),
+      Math.max(0.12, (coilPostB.y + targetB.y) * 0.42),
       (coilPostB.z + targetB.z) * 0.5 - 0.15
     );
 
@@ -2447,12 +2547,12 @@ export class EMInductionSceneController {
 
     const midLedA = new THREE.Vector3(
       (coilFrontA.x + ledLeftTerm.x) * 0.5,
-      Math.max(0.1, (coilFrontA.y + ledLeftTerm.y) * 0.36),
+      Math.max(0.1, (coilFrontA.y + ledLeftTerm.y) * 0.42),
       Math.max(coilFrontA.z, ledLeftTerm.z) * 0.65 + 0.22
     );
     const midLedB = new THREE.Vector3(
       (coilFrontB.x + ledRightTerm.x) * 0.5,
-      Math.max(0.1, (coilFrontB.y + ledRightTerm.y) * 0.36),
+      Math.max(0.1, (coilFrontB.y + ledRightTerm.y) * 0.42),
       Math.max(coilFrontB.z, ledRightTerm.z) * 0.65 + 0.34
     );
 
@@ -2505,14 +2605,14 @@ export class EMInductionSceneController {
       coilPostB,
       midB,
       targetB,
-      new THREE.Vector3(gx, 0.72, gz),
+      new THREE.Vector3(gx, 0.72 + gy, gz),
       targetA,
       midA,
       coilPostA,
       coilFrontA,
       midLedA,
       ledLeftTerm,
-      new THREE.Vector3(lx, 0.28, lz),
+      new THREE.Vector3(lx, 0.28 + ly, lz),
       ledRightTerm,
       midLedB,
       coilFrontB
@@ -2524,25 +2624,34 @@ export class EMInductionSceneController {
   /** Cập nhật dây dẫn mạch sơ cấp khi người dùng dời Nguồn DC, Khóa K hoặc Cuộn sơ cấp trên bàn */
   private rebuildPrimaryWiresIfNeeded(): void {
     const emX = this.primaryCoilGroup.position.x;
+    const emY = this.primaryCoilGroup.position.y;
     const bx = this.batteryGroup.position.x;
+    const by = this.batteryGroup.position.y;
     const bz = this.batteryGroup.position.z;
     const sx = this.switchBaseGroup.position.x;
+    const sy = this.switchBaseGroup.position.y;
     const sz = this.switchBaseGroup.position.z;
 
     if (
       Math.abs(emX - this.lastPriWireEmX) < 0.005 &&
+      Math.abs(emY - this.lastPriWireEmY) < 0.005 &&
       Math.abs(bx - this.lastPriWireBatX) < 0.005 &&
+      Math.abs(by - this.lastPriWireBatY) < 0.005 &&
       Math.abs(bz - this.lastPriWireBatZ) < 0.005 &&
       Math.abs(sx - this.lastPriWireSwX) < 0.005 &&
+      Math.abs(sy - this.lastPriWireSwY) < 0.005 &&
       Math.abs(sz - this.lastPriWireSwZ) < 0.005
     ) {
       return;
     }
 
     this.lastPriWireEmX = emX;
+    this.lastPriWireEmY = emY;
     this.lastPriWireBatX = bx;
+    this.lastPriWireBatY = by;
     this.lastPriWireBatZ = bz;
     this.lastPriWireSwX = sx;
+    this.lastPriWireSwY = sy;
     this.lastPriWireSwZ = sz;
 
     while (this.primaryWiresGroup.children.length > 0) {
@@ -2551,26 +2660,38 @@ export class EMInductionSceneController {
       this.primaryWiresGroup.remove(child);
     }
 
-    const batPos = new THREE.Vector3(bx + 0.25, 0.24, bz + 0.42);
-    const batNeg = new THREE.Vector3(bx - 0.25, 0.24, bz + 0.42);
-    const swLeft = new THREE.Vector3(sx - 0.28, 0.2, sz);
-    const swRight = new THREE.Vector3(sx + 0.28, 0.2, sz);
-    const coilIn = new THREE.Vector3(emX - 0.42, 0.45, 0.28);
-    const coilOut = new THREE.Vector3(emX + 0.42, 0.45, -0.28);
+    const batPos = new THREE.Vector3(bx + 0.25, by - 0.2, bz + 0.42);
+    const batNeg = new THREE.Vector3(bx - 0.25, by - 0.2, bz + 0.42);
+    const swLeft = new THREE.Vector3(sx - 0.28, sy + 0.12, sz);
+    const swRight = new THREE.Vector3(sx + 0.28, sy + 0.12, sz);
+    const coilIn = new THREE.Vector3(emX - 0.42, 0.45 + emY, 0.28);
+    const coilOut = new THREE.Vector3(emX + 0.42, 0.45 + emY, -0.28);
 
     const w1 = new THREE.CatmullRomCurve3([
       batPos,
-      new THREE.Vector3((batPos.x + swLeft.x) * 0.5, 0.14, (batPos.z + swLeft.z) * 0.5),
+      new THREE.Vector3(
+        (batPos.x + swLeft.x) * 0.5,
+        Math.max(0.14, (batPos.y + swLeft.y) * 0.45),
+        (batPos.z + swLeft.z) * 0.5
+      ),
       swLeft,
     ]);
     const w2 = new THREE.CatmullRomCurve3([
       swRight,
-      new THREE.Vector3((swRight.x + coilIn.x) * 0.5, 0.16, (swRight.z + coilIn.z) * 0.5),
+      new THREE.Vector3(
+        (swRight.x + coilIn.x) * 0.5,
+        Math.max(0.16, (swRight.y + coilIn.y) * 0.45),
+        (swRight.z + coilIn.z) * 0.5
+      ),
       coilIn,
     ]);
     const w3 = new THREE.CatmullRomCurve3([
       coilOut,
-      new THREE.Vector3((coilOut.x + batNeg.x) * 0.5, 0.16, (coilOut.z + batNeg.z) * 0.5 - 0.2),
+      new THREE.Vector3(
+        (coilOut.x + batNeg.x) * 0.5,
+        Math.max(0.16, (coilOut.y + batNeg.y) * 0.45),
+        (coilOut.z + batNeg.z) * 0.5 - 0.2
+      ),
       batNeg,
     ]);
 
@@ -2595,7 +2716,7 @@ export class EMInductionSceneController {
         swLeft,
         swRight,
         coilIn,
-        new THREE.Vector3(emX, 1.25, 0),
+        new THREE.Vector3(emX, 1.25 + emY, 0),
         coilOut,
         batNeg,
       ],
@@ -2852,9 +2973,10 @@ export class EMInductionSceneController {
   }
 
   /**
-   * Hệ thống kéo đa thiết bị trên mặt bàn thí nghiệm (Capture Phase):
-   * - Nam châm vĩnh cửu, Cuộn dây cảm ứng, Cuộn sơ cấp nam châm điện: kéo dọc trục X, tính toán cảm ứng điện từ thời gian thực.
-   * - Điện kế G, Nguồn điện DC, Công tắc Khóa K: kéo tự do trên mặt bàn (X, Z), dây dẫn tự động co giãn theo!
+   * Hệ thống kéo đa thiết bị & nhấc 3D siêu nhạy trên bàn thí nghiệm (Capture Phase):
+   * - Kéo ngang 1:1 không bị giật/nhảy vị trí đầu, tự động chọn mặt phẳng chiếu tối ưu theo góc nhìn camera.
+   * - Khi kéo núm nhấc 3D (hoặc bật chế độ Nhấc & Kéo 3D / giữ phím Shift): vừa nhấc lên xuống (Y) vừa di chuyển qua lại (X) mượt mà trong một thao tác.
+   * - Tất cả thiết bị (Nam châm, Cuộn dây, Nam châm điện, Điện kế G, Bộ 2 LED, Nguồn DC, Khóa K) đều kéo dời & nhấc được dễ dàng.
    */
   private bindPointerEvents(): void {
     const dom = this.renderer.domElement;
@@ -2867,80 +2989,133 @@ export class EMInductionSceneController {
         -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
     };
 
-    const updateCameraFacingAxisPlane = (anchorPos: THREE.Vector3) => {
-      _vec3A.subVectors(this.camera.position, anchorPos);
+    /**
+     * Khóa mặt phẳng kéo dọc trục X tối ưu theo góc nhìn camera tại thời điểm bắt đầu kéo.
+     * Mặt phẳng này chứa trục X và có pháp tuyến hướng thẳng về phía camera (dù nhìn ngang hay nhìn từ trên xuống).
+     */
+    const lockBestAxisXDragPlane = (worldAnchor: THREE.Vector3) => {
+      _vec3A.subVectors(this.camera.position, worldAnchor);
       _vec3A.x = 0;
       if (_vec3A.lengthSq() < 1e-4) {
-        _vec3A.set(0, 0, 1);
+        _vec3A.set(0, 1, 0);
       } else {
         _vec3A.normalize();
       }
-      _dragPlane.setFromNormalAndCoplanarPoint(_vec3A, anchorPos);
+      _dragPlane.setFromNormalAndCoplanarPoint(_vec3A, worldAnchor);
+    };
+
+    /**
+     * Khóa mặt phẳng thẳng đứng đối diện camera để vừa nhấc lên xuống (Y) vừa kéo qua lại (X, Z) trong không gian 3D.
+     */
+    const lockCameraFacing3DPlane = (worldAnchor: THREE.Vector3) => {
+      this.camera.getWorldDirection(_vec3A);
+      _vec3A.y *= 0.25; // Giữ mặt phẳng gần như thẳng đứng để kéo lên xuống Y cực nhạy
+      if (_vec3A.lengthSq() < 1e-4) {
+        _vec3A.set(0, 0, -1);
+      } else {
+        _vec3A.normalize();
+      }
+      _dragPlane.setFromNormalAndCoplanarPoint(_vec3A.negate(), worldAnchor);
     };
 
     const detectHitEquipment = (): {
       kind: DragTargetKind;
       group: THREE.Group | null;
     } => {
+      // 1. Ưu tiên kiểm tra các núm nhấc 3D và núm xoay 360° trước
       if (this.permanentMagnetGroup.visible) {
         if (
           this.raycaster.intersectObject(this.magnetLiftHandle, true).length > 0
         ) {
-          return { kind: 'magnet_lift', group: this.magnetFloatingGroup };
+          return { kind: 'magnet_lift', group: this.permanentMagnetGroup };
         }
-        if (
-          this.raycaster.intersectObject(this.permanentMagnetGroup, true).length >
-          0
-        ) {
-          return { kind: 'magnet', group: this.magnetFloatingGroup };
-        }
-      }
-      if (this.electromagnetGroup.visible) {
-        if (
-          this.raycaster.intersectObject(this.switchBaseGroup, true).length > 0
-        ) {
-          return { kind: 'knife_switch', group: this.switchBaseGroup };
-        }
-        if (
-          this.raycaster.intersectObject(this.primaryCoilGroup, true).length > 0
-        ) {
-          return { kind: 'electromagnet_coil', group: this.primaryCoilGroup };
-        }
-        if (this.raycaster.intersectObject(this.batteryGroup, true).length > 0) {
-          return { kind: 'power_supply', group: this.batteryGroup };
-        }
-      }
-      if (
-        this.raycaster.intersectObject(this.ledModuleGroup, true).length > 0
-      ) {
-        return { kind: 'led_module', group: this.ledModuleGroup };
       }
       if (
         this.raycaster.intersectObject(this.coilLiftHandle, true).length > 0
       ) {
-        return { kind: 'coil_lift', group: this.coilFloatingGroup };
-      }
-      if (
-        this.raycaster.intersectObject(this.coilFloatingGroup, true).length > 0 ||
-        this.raycaster.intersectObject(this.secondaryCoilGroup, true).length > 0
-      ) {
-        return { kind: 'secondary_coil', group: this.secondaryCoilGroup };
+        return { kind: 'coil_lift', group: this.secondaryCoilGroup };
       }
       if (
         this.raycaster.intersectObject(this.galvRotateRingGroup, true).length > 0
       ) {
         return { kind: 'galvanometer_rotate', group: this.galvanometerGroup };
       }
-      if (
-        this.raycaster.intersectObject(this.galvanometerGroup, true).length > 0
-      ) {
-        return { kind: 'galvanometer', group: this.galvanometerGroup };
+
+      // 2. Kiểm tra tất cả thiết bị trên bàn và chọn thiết bị nằm gần camera nhất theo khoảng cách tia Raycast
+      const candidates: Array<{
+        kind: DragTargetKind;
+        group: THREE.Group;
+        targetObj: THREE.Object3D;
+      }> = [
+        {
+          kind: 'secondary_coil',
+          group: this.secondaryCoilGroup,
+          targetObj: this.secondaryCoilGroup,
+        },
+        {
+          kind: 'led_module',
+          group: this.ledModuleGroup,
+          targetObj: this.ledModuleGroup,
+        },
+        {
+          kind: 'galvanometer',
+          group: this.galvanometerGroup,
+          targetObj: this.galvanometerGroup,
+        },
+      ];
+
+      if (this.permanentMagnetGroup.visible) {
+        candidates.unshift({
+          kind: 'magnet',
+          group: this.permanentMagnetGroup,
+          targetObj: this.permanentMagnetGroup,
+        });
       }
-      return { kind: 'none', group: null };
+
+      if (this.electromagnetGroup.visible) {
+        candidates.unshift(
+          {
+            kind: 'knife_switch',
+            group: this.switchBaseGroup,
+            targetObj: this.switchBaseGroup,
+          },
+          {
+            kind: 'electromagnet_coil',
+            group: this.primaryCoilGroup,
+            targetObj: this.primaryCoilGroup,
+          },
+          {
+            kind: 'power_supply',
+            group: this.batteryGroup,
+            targetObj: this.batteryGroup,
+          }
+        );
+      }
+
+      let bestHit: { kind: DragTargetKind; group: THREE.Group | null } = {
+        kind: 'none',
+        group: null,
+      };
+      let minDistance = Infinity;
+
+      for (const item of candidates) {
+        const hits = this.raycaster.intersectObject(item.targetObj, true);
+        if (hits.length > 0 && hits[0].distance < minDistance) {
+          minDistance = hits[0].distance;
+          bestHit = { kind: item.kind, group: item.group };
+        }
+      }
+
+      return bestHit;
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') {
+      if (
+        e.button !== undefined &&
+        e.button !== 0 &&
+        e.button !== 2 &&
+        e.pointerType === 'mouse'
+      ) {
         return;
       }
 
@@ -2956,7 +3131,25 @@ export class EMInductionSceneController {
         }
         e.stopPropagation();
 
-        this.activeDragKind = hit.kind;
+        // Nếu người dùng bật chế độ Nhấc & Kéo 3D, giữ phím Shift, hoặc kéo bằng chuột phải:
+        // tự động kích hoạt kéo nhấc 3D (X + Y) cho mọi thiết bị!
+        const want3DLift =
+          this.free3DDragMode ||
+          e.shiftKey ||
+          (e.pointerType === 'mouse' && e.button === 2);
+
+        if (hit.kind === 'magnet' && want3DLift) {
+          this.activeDragKind = 'magnet_lift';
+        } else if (hit.kind === 'secondary_coil' && want3DLift) {
+          this.activeDragKind = 'coil_lift';
+        } else {
+          this.activeDragKind = hit.kind;
+        }
+        this.activeDragIs3DLift =
+          want3DLift ||
+          this.activeDragKind === 'magnet_lift' ||
+          this.activeDragKind === 'coil_lift';
+
         this.activePointerId = e.pointerId;
         dom.style.cursor = 'grabbing';
 
@@ -2966,42 +3159,38 @@ export class EMInductionSceneController {
           // Bỏ qua
         }
 
-        if (hit.kind === 'magnet_lift') {
-          this.camera.getWorldDirection(_vec3A);
-          _dragPlane.setFromNormalAndCoplanarPoint(
-            _vec3A.negate(),
-            this.magnetFloatingGroup.getWorldPosition(_vec3B)
-          );
+        if (this.activeDragKind === 'magnet_lift') {
+          this.magnetFloatingGroup.getWorldPosition(_vec3B);
+          _vec3B.y += 0.85;
+          lockCameraFacing3DPlane(_vec3B);
           if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
             this.dragOffset.set(
-              0,
+              this.permanentMagnetGroup.position.x - _rayIntersect.x,
               this.magnetFloatingGroup.position.y - _rayIntersect.y,
-              0
+              this.magnetFloatingGroup.position.z - _rayIntersect.z
             );
           }
           this.callbacks.onMagnetDragStart();
-        } else if (hit.kind === 'coil_lift') {
-          this.camera.getWorldDirection(_vec3A);
-          _dragPlane.setFromNormalAndCoplanarPoint(
-            _vec3A.negate(),
-            this.coilFloatingGroup.getWorldPosition(_vec3B)
-          );
+        } else if (this.activeDragKind === 'coil_lift') {
+          this.coilFloatingGroup.getWorldPosition(_vec3B);
+          _vec3B.y += 0.85;
+          lockCameraFacing3DPlane(_vec3B);
           if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
             this.dragOffset.set(
-              0,
+              this.secondaryCoilGroup.position.x - _rayIntersect.x,
               this.coilFloatingGroup.position.y - _rayIntersect.y,
-              0
+              this.coilFloatingGroup.position.z - _rayIntersect.z
             );
           }
           this.callbacks.onCoilDragStart();
-        } else if (
-          hit.kind === 'magnet' ||
-          hit.kind === 'secondary_coil' ||
-          hit.kind === 'electromagnet_coil'
-        ) {
-          if (hit.kind === 'magnet' && this.magnetFloatingGroup.position.y > 0.05) {
+        } else if (this.activeDragKind === 'magnet') {
+          if (this.magnetFloatingGroup.position.y > 0.04) {
             _vec3A.set(0, 1, 0);
-            this.magnetFloatingGroup.getWorldPosition(_vec3B);
+            _vec3B.set(
+              this.permanentMagnetGroup.position.x,
+              0.85 + this.magnetFloatingGroup.position.y,
+              this.magnetFloatingGroup.position.z
+            );
             _tableElevatedPlane.setFromNormalAndCoplanarPoint(_vec3A, _vec3B);
             if (
               this.raycaster.ray.intersectPlane(
@@ -3015,10 +3204,26 @@ export class EMInductionSceneController {
                 this.magnetFloatingGroup.position.z - _rayIntersect.z
               );
             }
-            this.callbacks.onMagnetDragStart();
-          } else if (hit.kind === 'secondary_coil' && this.coilFloatingGroup.position.y > 0.05) {
+          } else {
+            _vec3B.set(this.permanentMagnetGroup.position.x, 0.75, 0);
+            lockBestAxisXDragPlane(_vec3B);
+            if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+              this.dragOffset.set(
+                this.permanentMagnetGroup.position.x - _rayIntersect.x,
+                0,
+                0
+              );
+            }
+          }
+          this.callbacks.onMagnetDragStart();
+        } else if (this.activeDragKind === 'secondary_coil') {
+          if (this.coilFloatingGroup.position.y > 0.04) {
             _vec3A.set(0, 1, 0);
-            this.coilFloatingGroup.getWorldPosition(_vec3B);
+            _vec3B.set(
+              this.secondaryCoilGroup.position.x,
+              0.85 + this.coilFloatingGroup.position.y,
+              this.coilFloatingGroup.position.z
+            );
             _tableElevatedPlane.setFromNormalAndCoplanarPoint(_vec3A, _vec3B);
             if (
               this.raycaster.ray.intersectPlane(
@@ -3032,19 +3237,38 @@ export class EMInductionSceneController {
                 this.coilFloatingGroup.position.z - _rayIntersect.z
               );
             }
-            this.callbacks.onCoilDragStart();
           } else {
-            updateCameraFacingAxisPlane(hit.group.position);
+            _vec3B.set(this.secondaryCoilGroup.position.x, 0.75, 0);
+            lockBestAxisXDragPlane(_vec3B);
             if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
-              this.dragOffset.set(hit.group.position.x - _rayIntersect.x, 0, 0);
+              this.dragOffset.set(
+                this.secondaryCoilGroup.position.x - _rayIntersect.x,
+                0,
+                0
+              );
             }
-            if (hit.kind === 'magnet') this.callbacks.onMagnetDragStart();
-            else if (hit.kind === 'secondary_coil')
-              this.callbacks.onCoilDragStart();
-            else if (hit.kind === 'electromagnet_coil')
-              this.callbacks.onElectromagnetDragStart();
           }
-        } else if (hit.kind === 'galvanometer_rotate') {
+          this.callbacks.onCoilDragStart();
+        } else if (this.activeDragKind === 'electromagnet_coil') {
+          _vec3B.set(
+            this.primaryCoilGroup.position.x,
+            0.75 + this.primaryCoilGroup.position.y,
+            0
+          );
+          if (this.activeDragIs3DLift) {
+            lockCameraFacing3DPlane(_vec3B);
+          } else {
+            lockBestAxisXDragPlane(_vec3B);
+          }
+          if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+            this.dragOffset.set(
+              this.primaryCoilGroup.position.x - _rayIntersect.x,
+              this.primaryCoilGroup.position.y - _rayIntersect.y,
+              0
+            );
+          }
+          this.callbacks.onElectromagnetDragStart();
+        } else if (this.activeDragKind === 'galvanometer_rotate') {
           this.galvAutoFaceCamera = false;
           if (
             this.raycaster.ray.intersectPlane(
@@ -3060,18 +3284,32 @@ export class EMInductionSceneController {
               this.galvanometerGroup.rotation.y - pointerAngle;
           }
         } else {
-          // Thiết bị kéo tự do trên mặt phẳng bàn (X, Z): Bộ 2 LED, Điện kế G, Nguồn DC, Khóa K
-          if (
-            this.raycaster.ray.intersectPlane(
-              _tableHorizontalPlane,
-              _rayIntersect
-            )
-          ) {
-            this.dragOffset.set(
-              hit.group.position.x - _rayIntersect.x,
-              0,
-              hit.group.position.z - _rayIntersect.z
-            );
+          // Thiết bị trên mặt bàn (Bộ 2 LED, Điện kế G, Nguồn DC, Khóa K): hỗ trợ cả kéo ngang (X, Z) và nhấc 3D (Y)
+          hit.group.getWorldPosition(_vec3B);
+          if (this.activeDragIs3DLift) {
+            lockCameraFacing3DPlane(_vec3B);
+            if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+              this.dragOffset.set(
+                hit.group.position.x - _rayIntersect.x,
+                hit.group.position.y - _rayIntersect.y,
+                hit.group.position.z - _rayIntersect.z
+              );
+            }
+          } else {
+            _vec3A.set(0, 1, 0);
+            _tableElevatedPlane.setFromNormalAndCoplanarPoint(_vec3A, _vec3B);
+            if (
+              this.raycaster.ray.intersectPlane(
+                _tableElevatedPlane,
+                _rayIntersect
+              )
+            ) {
+              this.dragOffset.set(
+                hit.group.position.x - _rayIntersect.x,
+                0,
+                hit.group.position.z - _rayIntersect.z
+              );
+            }
           }
         }
         return;
@@ -3095,62 +3333,57 @@ export class EMInductionSceneController {
           : this.primaryCoilGroup.position.x;
 
         if (this.activeDragKind === 'magnet_lift') {
-          this.camera.getWorldDirection(_vec3A);
-          _dragPlane.setFromNormalAndCoplanarPoint(
-            _vec3A.negate(),
-            this.magnetFloatingGroup.getWorldPosition(_vec3B)
-          );
           if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+            const targetX = clampMagnetX(
+              _rayIntersect.x + this.dragOffset.x,
+              coilX
+            );
             let targetY = THREE.MathUtils.clamp(
               _rayIntersect.y + this.dragOffset.y,
               0,
               2.5
             );
-            // Tự động hít/snap về bệ đỡ trên bàn khi rà về gần mặt bàn
-            if (targetY < 0.22) {
+            if (targetY < 0.025) {
               targetY = 0;
             }
+            this.permanentMagnetGroup.position.x = targetX;
             this.magnetFloatingGroup.position.y = targetY;
             if (targetY === 0) {
               this.magnetFloatingGroup.position.z = 0;
             }
             this.callbacks.onMagnetDragMove(
-              this.permanentMagnetGroup.position.x,
+              targetX,
               targetY,
               this.magnetFloatingGroup.position.z
             );
           }
         } else if (this.activeDragKind === 'coil_lift') {
-          this.camera.getWorldDirection(_vec3A);
-          _dragPlane.setFromNormalAndCoplanarPoint(
-            _vec3A.negate(),
-            this.coilFloatingGroup.getWorldPosition(_vec3B)
-          );
           if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+            const targetCoilX = clampCoilX(
+              _rayIntersect.x + this.dragOffset.x,
+              leftSourceX
+            );
             let targetY = THREE.MathUtils.clamp(
               _rayIntersect.y + this.dragOffset.y,
               0,
               2.5
             );
-            // Tự động hít/snap về bệ đỡ trên bàn khi rà về gần mặt bàn
-            if (targetY < 0.22) {
+            if (targetY < 0.025) {
               targetY = 0;
             }
+            this.secondaryCoilGroup.position.x = targetCoilX;
             this.coilFloatingGroup.position.y = targetY;
             if (targetY === 0) {
               this.coilFloatingGroup.position.z = 0;
             }
             this.callbacks.onCoilDragMove(
-              this.secondaryCoilGroup.position.x,
+              targetCoilX,
               targetY,
               this.coilFloatingGroup.position.z
             );
           }
         } else if (this.activeDragKind === 'magnet') {
-          if (this.magnetFloatingGroup.position.y > 0.05) {
-            _vec3A.set(0, 1, 0);
-            this.magnetFloatingGroup.getWorldPosition(_vec3B);
-            _tableElevatedPlane.setFromNormalAndCoplanarPoint(_vec3A, _vec3B);
+          if (this.magnetFloatingGroup.position.y > 0.04) {
             if (
               this.raycaster.ray.intersectPlane(
                 _tableElevatedPlane,
@@ -3163,10 +3396,10 @@ export class EMInductionSceneController {
               );
               let targetZ = THREE.MathUtils.clamp(
                 _rayIntersect.z + this.dragOffset.z,
-                -1.8,
-                1.8
+                -1.95,
+                1.95
               );
-              if (Math.abs(targetZ) < 0.16 && this.magnetFloatingGroup.position.y < 0.35) {
+              if (Math.abs(targetZ) < 0.08 && this.magnetFloatingGroup.position.y < 0.15) {
                 targetZ = 0;
               }
               this.permanentMagnetGroup.position.x = targetX;
@@ -3178,7 +3411,6 @@ export class EMInductionSceneController {
               );
             }
           } else {
-            updateCameraFacingAxisPlane(this.permanentMagnetGroup.position);
             if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
               const targetX = clampMagnetX(
                 _rayIntersect.x + this.dragOffset.x,
@@ -3189,10 +3421,7 @@ export class EMInductionSceneController {
             }
           }
         } else if (this.activeDragKind === 'secondary_coil') {
-          if (this.coilFloatingGroup.position.y > 0.05) {
-            _vec3A.set(0, 1, 0);
-            this.coilFloatingGroup.getWorldPosition(_vec3B);
-            _tableElevatedPlane.setFromNormalAndCoplanarPoint(_vec3A, _vec3B);
+          if (this.coilFloatingGroup.position.y > 0.04) {
             if (
               this.raycaster.ray.intersectPlane(
                 _tableElevatedPlane,
@@ -3205,10 +3434,10 @@ export class EMInductionSceneController {
               );
               let targetZ = THREE.MathUtils.clamp(
                 _rayIntersect.z + this.dragOffset.z,
-                -1.8,
-                1.8
+                -1.95,
+                1.95
               );
-              if (Math.abs(targetZ) < 0.16 && this.coilFloatingGroup.position.y < 0.35) {
+              if (Math.abs(targetZ) < 0.08 && this.coilFloatingGroup.position.y < 0.15) {
                 targetZ = 0;
               }
               this.secondaryCoilGroup.position.x = targetCoilX;
@@ -3220,7 +3449,6 @@ export class EMInductionSceneController {
               );
             }
           } else {
-            updateCameraFacingAxisPlane(this.secondaryCoilGroup.position);
             if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
               const targetCoilX = clampCoilX(
                 _rayIntersect.x + this.dragOffset.x,
@@ -3231,31 +3459,50 @@ export class EMInductionSceneController {
             }
           }
         } else if (this.activeDragKind === 'electromagnet_coil') {
-          updateCameraFacingAxisPlane(this.primaryCoilGroup.position);
           if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
             const targetEmX = clampMagnetX(
               _rayIntersect.x + this.dragOffset.x,
               coilX
             );
             this.primaryCoilGroup.position.x = targetEmX;
+            if (this.activeDragIs3DLift) {
+              this.primaryCoilGroup.position.y = THREE.MathUtils.clamp(
+                _rayIntersect.y + this.dragOffset.y,
+                0,
+                2.2
+              );
+            }
             this.callbacks.onElectromagnetDragMove(targetEmX);
           }
         } else if (this.activeDragKind === 'led_module') {
-          if (
+          if (this.activeDragIs3DLift) {
+            if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+              this.ledModuleGroup.position.x = THREE.MathUtils.clamp(
+                _rayIntersect.x + this.dragOffset.x,
+                -4.6,
+                4.2
+              );
+              this.ledModuleGroup.position.y = THREE.MathUtils.clamp(
+                _rayIntersect.y + this.dragOffset.y,
+                0,
+                2.2
+              );
+            }
+          } else if (
             this.raycaster.ray.intersectPlane(
-              _tableHorizontalPlane,
+              _tableElevatedPlane,
               _rayIntersect
             )
           ) {
             this.ledModuleGroup.position.x = THREE.MathUtils.clamp(
               _rayIntersect.x + this.dragOffset.x,
-              -4.2,
-              3.95
+              -4.6,
+              4.2
             );
             this.ledModuleGroup.position.z = THREE.MathUtils.clamp(
               _rayIntersect.z + this.dragOffset.z,
-              -1.85,
-              1.88
+              -2.1,
+              2.1
             );
           }
         } else if (this.activeDragKind === 'galvanometer_rotate') {
@@ -3277,39 +3524,65 @@ export class EMInductionSceneController {
             this.callbacks.onGalvanometerRotate?.(deg, false);
           }
         } else if (this.activeDragKind === 'galvanometer') {
-          if (
+          if (this.activeDragIs3DLift) {
+            if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+              this.galvanometerGroup.position.x = THREE.MathUtils.clamp(
+                _rayIntersect.x + this.dragOffset.x,
+                -4.2,
+                4.2
+              );
+              this.galvanometerGroup.position.y = THREE.MathUtils.clamp(
+                _rayIntersect.y + this.dragOffset.y,
+                0,
+                2.2
+              );
+            }
+          } else if (
             this.raycaster.ray.intersectPlane(
-              _tableHorizontalPlane,
+              _tableElevatedPlane,
               _rayIntersect
             )
           ) {
             this.galvanometerGroup.position.x = THREE.MathUtils.clamp(
               _rayIntersect.x + this.dragOffset.x,
-              -1.5,
-              3.9
+              -4.2,
+              4.2
             );
             this.galvanometerGroup.position.z = THREE.MathUtils.clamp(
               _rayIntersect.z + this.dragOffset.z,
-              -1.85,
-              1.55
+              -2.1,
+              2.0
             );
           }
         } else if (this.activeDragKind === 'power_supply') {
-          if (
+          if (this.activeDragIs3DLift) {
+            if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+              this.batteryGroup.position.x = THREE.MathUtils.clamp(
+                _rayIntersect.x + this.dragOffset.x,
+                -4.7,
+                3.8
+              );
+              this.batteryGroup.position.y = THREE.MathUtils.clamp(
+                _rayIntersect.y + this.dragOffset.y,
+                0.44,
+                2.4
+              );
+            }
+          } else if (
             this.raycaster.ray.intersectPlane(
-              _tableHorizontalPlane,
+              _tableElevatedPlane,
               _rayIntersect
             )
           ) {
             this.batteryGroup.position.x = THREE.MathUtils.clamp(
               _rayIntersect.x + this.dragOffset.x,
-              -4.6,
-              -1.2
+              -4.7,
+              3.8
             );
             this.batteryGroup.position.z = THREE.MathUtils.clamp(
               _rayIntersect.z + this.dragOffset.z,
-              -1.85,
-              1.4
+              -2.1,
+              2.0
             );
           }
         } else if (this.activeDragKind === 'knife_switch') {
@@ -3317,37 +3590,56 @@ export class EMInductionSceneController {
             e.clientX - this.pointerDownScreenPos.x,
             e.clientY - this.pointerDownScreenPos.y
           );
-          if (moveDist > 6) {
+          if (moveDist > 5) {
             this.switchMovedDuringDrag = true;
           }
-          if (
-            this.switchMovedDuringDrag &&
-            this.raycaster.ray.intersectPlane(
-              _tableHorizontalPlane,
-              _rayIntersect
-            )
-          ) {
-            this.switchBaseGroup.position.x = THREE.MathUtils.clamp(
-              _rayIntersect.x + this.dragOffset.x,
-              -4.6,
-              -0.8
-            );
-            this.switchBaseGroup.position.z = THREE.MathUtils.clamp(
-              _rayIntersect.z + this.dragOffset.z,
-              -1.6,
-              1.85
-            );
+          if (this.switchMovedDuringDrag) {
+            if (this.activeDragIs3DLift) {
+              if (this.raycaster.ray.intersectPlane(_dragPlane, _rayIntersect)) {
+                this.switchBaseGroup.position.x = THREE.MathUtils.clamp(
+                  _rayIntersect.x + this.dragOffset.x,
+                  -4.7,
+                  3.8
+                );
+                this.switchBaseGroup.position.y = THREE.MathUtils.clamp(
+                  _rayIntersect.y + this.dragOffset.y,
+                  0.08,
+                  2.2
+                );
+              }
+            } else if (
+              this.raycaster.ray.intersectPlane(
+                _tableElevatedPlane,
+                _rayIntersect
+              )
+            ) {
+              this.switchBaseGroup.position.x = THREE.MathUtils.clamp(
+                _rayIntersect.x + this.dragOffset.x,
+                -4.7,
+                3.8
+              );
+              this.switchBaseGroup.position.z = THREE.MathUtils.clamp(
+                _rayIntersect.z + this.dragOffset.z,
+                -2.0,
+                2.1
+              );
+            }
           }
         }
         return;
       }
 
-      // Hover chỉ báo con trỏ chuột khi di qua các thiết bị trên bàn
+      // Hover chỉ báo con trỏ chuột & làm nổi bật tay nắm khi di qua các thiết bị trên bàn
       if (e.pointerType === 'mouse' && this.activeDragKind === 'none') {
         const hit = detectHitEquipment();
+        this.hoveredKind = hit.kind;
         this.isHoveringDraggable = hit.kind !== 'none';
-        if (hit.kind === 'magnet_lift' || hit.kind === 'coil_lift') {
-          dom.style.cursor = 'ns-resize';
+        if (
+          hit.kind === 'magnet_lift' ||
+          hit.kind === 'coil_lift' ||
+          (this.free3DDragMode && this.isHoveringDraggable)
+        ) {
+          dom.style.cursor = 'move';
         } else {
           dom.style.cursor = this.isHoveringDraggable ? 'grab' : 'default';
         }
@@ -3368,6 +3660,7 @@ export class EMInductionSceneController {
 
       const finishedKind = this.activeDragKind;
       this.activeDragKind = 'none';
+      this.activeDragIs3DLift = false;
       this.activePointerId = null;
       dom.style.cursor = this.isHoveringDraggable ? 'grab' : 'default';
       if (this.controls) {
@@ -3375,8 +3668,8 @@ export class EMInductionSceneController {
       }
 
       if (finishedKind === 'magnet' || finishedKind === 'magnet_lift') {
-        if (this.magnetFloatingGroup.position.y < 0.25) {
-          const wasLifted = this.magnetFloatingGroup.position.y > 0.04;
+        if (this.magnetFloatingGroup.position.y < 0.09) {
+          const wasLifted = this.magnetFloatingGroup.position.y > 0.02;
           this.magnetFloatingGroup.position.set(0, 0, 0);
           this.callbacks.onMagnetDragMove(this.permanentMagnetGroup.position.x, 0, 0);
           if (wasLifted) {
@@ -3385,8 +3678,8 @@ export class EMInductionSceneController {
         }
         this.callbacks.onMagnetDragEnd();
       } else if (finishedKind === 'secondary_coil' || finishedKind === 'coil_lift') {
-        if (this.coilFloatingGroup.position.y < 0.25) {
-          const wasLifted = this.coilFloatingGroup.position.y > 0.04;
+        if (this.coilFloatingGroup.position.y < 0.09) {
+          const wasLifted = this.coilFloatingGroup.position.y > 0.02;
           this.coilFloatingGroup.position.set(0, 0, 0);
           this.callbacks.onCoilDragMove(this.secondaryCoilGroup.position.x, 0, 0);
           if (wasLifted) {
@@ -3395,6 +3688,9 @@ export class EMInductionSceneController {
         }
         this.callbacks.onCoilDragEnd();
       } else if (finishedKind === 'electromagnet_coil') {
+        if (this.primaryCoilGroup.position.y < 0.09) {
+          this.primaryCoilGroup.position.y = 0;
+        }
         this.callbacks.onElectromagnetDragEnd();
       } else if (
         finishedKind === 'knife_switch' &&
@@ -3404,13 +3700,19 @@ export class EMInductionSceneController {
       }
     };
 
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
     dom.addEventListener('pointerdown', onPointerDown, { capture: true });
+    dom.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', finishDrag);
     window.addEventListener('pointercancel', finishDrag);
 
     this.cleanupEvents = () => {
       dom.removeEventListener('pointerdown', onPointerDown, { capture: true });
+      dom.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', finishDrag);
       window.removeEventListener('pointercancel', finishDrag);
@@ -3531,10 +3833,18 @@ export class EMInductionSceneController {
 
       this.magnetDragRingMat.emissiveIntensity =
         this.activeDragKind === 'magnet' || this.activeDragKind === 'magnet_lift'
-          ? 1.35
-          : this.isHoveringDraggable
-            ? 0.85
-            : 0.4;
+          ? 1.45
+          : this.hoveredKind === 'magnet' || this.hoveredKind === 'magnet_lift'
+            ? 1.05
+            : 0.5;
+
+      const magLiftScale =
+        this.activeDragKind === 'magnet_lift' ||
+        this.hoveredKind === 'magnet_lift' ||
+        (this.free3DDragMode && this.hoveredKind === 'magnet')
+          ? 1.22
+          : 1.0;
+      this.magnetLiftHandle.scale.set(magLiftScale, magLiftScale, magLiftScale);
     } else {
       this.primaryCoilGroup.position.x = state.electromagnetX;
       this.ironCoreMesh.visible = params.hasIronCore;
@@ -3550,6 +3860,23 @@ export class EMInductionSceneController {
       this.primaryCoilEmissiveMat.emissiveIntensity = normIp * 0.5;
       this.rebuildPrimaryWiresIfNeeded();
     }
+
+    this.coilDragRingMat.emissiveIntensity =
+      this.activeDragKind === 'secondary_coil' ||
+      this.activeDragKind === 'coil_lift'
+        ? 1.4
+        : this.hoveredKind === 'secondary_coil' ||
+            this.hoveredKind === 'coil_lift'
+          ? 1.0
+          : 0.45;
+
+    const coilLiftScale =
+      this.activeDragKind === 'coil_lift' ||
+      this.hoveredKind === 'coil_lift' ||
+      (this.free3DDragMode && this.hoveredKind === 'secondary_coil')
+        ? 1.22
+        : 1.0;
+    this.coilLiftHandle.scale.set(coilLiftScale, coilLiftScale, coilLiftScale);
 
     // Cập nhật dây nối động giữa Cuộn cảm ứng và Điện kế G
     this.rebuildSecondaryWiresIfNeeded(
